@@ -9,6 +9,7 @@ pkg_available <- requireNamespace("PosPredictor", quietly = TRUE)
 if (pkg_available) {
   simulate_historical_data <- PosPredictor::simulate_historical_data
   compute_pos_closed_form  <- PosPredictor::compute_pos_closed_form
+  estimate_tau_rho         <- PosPredictor::estimate_tau_rho
   compile_stan_model       <- PosPredictor::compile_stan_model
   load_stan_model          <- PosPredictor::load_stan_model
   compute_pos_mcmc         <- PosPredictor::compute_pos_mcmc
@@ -135,6 +136,34 @@ server <- function(input, output, session) {
   # =========================================================================
   cf_result <- reactiveVal(NULL)
 
+  # Auto-populate tau / rho inputs from moment estimates of the historical data
+  observeEvent(input$cf_estimate_btn, {
+    df <- hist_data()
+    req(df)
+    est <- tryCatch(
+      estimate_tau_rho(df),
+      error = function(e) {
+        showNotification(paste("Estimation error:", conditionMessage(e)), type = "error")
+        NULL
+      }
+    )
+    if (!is.null(est)) {
+      tau_os_est  <- round(est$tau[1], 4)
+      tau_pfs_est <- round(est$tau[2], 4)
+      rho_est     <- round(est$rho,    2)
+      updateNumericInput(session, "cf_tau_os",      value = tau_os_est)
+      updateNumericInput(session, "cf_tau_pfs",     value = tau_pfs_est)
+      updateSliderInput(session,  "cf_rho_between", value = rho_est)
+      showNotification(
+        paste0("τ_OS = ", tau_os_est,
+               ", τ_PFS = ", tau_pfs_est,
+               ", ρ = ", rho_est,
+               " (estimated from historical data)"),
+        type = "message", duration = 6
+      )
+    }
+  })
+
   observeEvent(input$run_cf_btn, {
     df <- hist_data()
     req(df, input$cur_y_os, input$cur_y_pfs,
@@ -185,7 +214,12 @@ server <- function(input, output, session) {
         style = "margin:5px 0 0 0;"),
       p(paste0("Success threshold: target log(HR) = ", round(input$target_os, 3),
                " (HR ≤ ", round(exp(input$target_os), 3), ")"),
-        style = "margin:5px 0 0 0;")
+        style = "margin:5px 0 0 0;"),
+      p(paste0("Between-trial parameters used: τ_OS = ",
+               round(res$tau_used[1], 4),
+               ", τ_PFS = ", round(res$tau_used[2], 4),
+               ", ρ = ", round(res$rho_between_used, 3)),
+        style = "margin:5px 0 0 0; font-size:13px; opacity:0.9;")
     )
   })
 

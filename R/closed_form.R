@@ -1,3 +1,43 @@
+#' Estimate Between-Trial Heterogeneity from Historical Data
+#'
+#' Uses method-of-moments to estimate the between-trial standard deviations
+#' (\eqn{\tau_{OS}}, \eqn{\tau_{PFS}}) and correlation (\eqn{\rho}) from the
+#' marginal distribution of observed log-HRs across historical trials.
+#'
+#' The estimator subtracts the mean within-trial variance from the observed
+#' marginal variance: \eqn{\hat\tau^2 = \max(0,\, \hat\sigma^2_y - \overline{s^2})},
+#' and estimates the between-trial correlation from the residual covariance
+#' after removing the average within-trial covariance.
+#'
+#' This mirrors the information the MCMC uses when estimating these
+#' parameters from data, and produces values that keep the closed-form and
+#' MCMC results calibrated to the same historical evidence.
+#'
+#' @param hist_data data.frame from \code{\link{simulate_historical_data}}.
+#' @return A named list with: \code{tau} (length-2 vector), \code{rho} (scalar).
+#' @export
+estimate_tau_rho <- function(hist_data) {
+  # Method-of-Moments: Var(y_k) = tau^2 + E[se_k^2], so tau^2 = Var(y_k) - E[se_k^2]
+  tau_os_sq  <- max(0, stats::var(hist_data$log_hr_os)  - mean(hist_data$se_os^2))
+  tau_pfs_sq <- max(0, stats::var(hist_data$log_hr_pfs) - mean(hist_data$se_pfs^2))
+  tau_os  <- sqrt(tau_os_sq)
+  tau_pfs <- sqrt(tau_pfs_sq)
+
+  if (tau_os > 0 && tau_pfs > 0) {
+    # Cov(y_os, y_pfs) = rho * tau_os * tau_pfs + E[within_corr * se_os * se_pfs]
+    within_cov_mean <- mean(hist_data$within_corr * hist_data$se_os * hist_data$se_pfs)
+    rho <- (stats::cov(hist_data$log_hr_os, hist_data$log_hr_pfs) - within_cov_mean) /
+           (tau_os * tau_pfs)
+    rho <- max(-0.99, min(0.99, rho))
+    # Clamp to (-0.99, 0.99) rather than (-1, 1) to keep Sigma_between
+    # strictly positive-definite (det > 0) even with noisy moment estimates.
+  } else {
+    rho <- 0
+  }
+
+  list(tau = c(tau_os, tau_pfs), rho = rho)
+}
+
 #' Compute PoS via Closed-Form Conjugate Multivariate-Normal Model
 #'
 #' Uses a conjugate bivariate-normal Bayesian update to compute the posterior
@@ -13,6 +53,13 @@
 #'   \item PoS = \eqn{P(\theta_{cur,OS} < target_{OS})}
 #' }
 #'
+#' \strong{Note on consistency with MCMC}: the MCMC model estimates
+#' \eqn{\tau} and \eqn{\rho} from data with diffuse priors; the closed-form
+#' conditions on fixed values.  Pass \code{tau = NULL} and/or
+#' \code{rho_between = NULL} to auto-estimate these from \code{hist_data}
+#' via \code{\link{estimate_tau_rho}}, which improves agreement with MCMC
+#' by grounding both methods in the same historical evidence.
+#'
 #' @param hist_data data.frame from \code{\link{simulate_historical_data}}.
 #' @param current_y_os Numeric. Current trial observed log(HR) for OS.
 #' @param current_y_pfs Numeric. Current trial observed log(HR) for PFS.
@@ -22,10 +69,14 @@
 #' @param target_os Numeric. Success threshold for OS log(HR) (e.g. log(0.74)).
 #' @param mu_prior Numeric vector length 2. Prior means for (OS, PFS) log(HR).
 #' @param sigma_prior Numeric vector length 2. Prior SDs for (OS, PFS) log(HR).
-#' @param tau Numeric vector length 2. Between-trial SDs for (OS, PFS).
-#' @param rho_between Numeric. Between-trial correlation.
+#' @param tau Numeric vector length 2, or \code{NULL}.  Between-trial SDs for
+#'   (OS, PFS).  \code{NULL} auto-estimates from \code{hist_data} via
+#'   \code{\link{estimate_tau_rho}}.
+#' @param rho_between Numeric or \code{NULL}.  Between-trial correlation.
+#'   \code{NULL} auto-estimates from \code{hist_data}.
 #' @return A named list with: pos, mu_posterior, sigma_posterior,
-#'   mu_prior_hist, sigma_prior_hist, credible_interval_os.
+#'   mu_prior_hist, sigma_prior_hist, credible_interval_os,
+#'   tau_used, rho_between_used.
 #' @export
 compute_pos_closed_form <- function(hist_data,
                                      current_y_os,
@@ -36,8 +87,19 @@ compute_pos_closed_form <- function(hist_data,
                                      target_os   = log(0.74),
                                      mu_prior    = c(-0.30, -0.40),
                                      sigma_prior = c(0.50, 0.50),
-                                     tau         = c(0.15, 0.18),
-                                     rho_between = 0.75) {
+                                     tau         = NULL,
+                                     rho_between = NULL) {
+
+  # Auto-estimate between-trial heterogeneity from historical data when not provided.
+  # Fixed user-supplied values diverge from MCMC because the MCMC estimates tau
+  # and rho from data (with diffuse priors), making its effective Sigma_between
+  # larger than the old hardcoded defaults.  Using moment estimates from the same
+  # historical data keeps both methods grounded in the same evidence.
+  if (is.null(tau) || is.null(rho_between)) {
+    est <- estimate_tau_rho(hist_data)
+    if (is.null(tau))         tau         <- est$tau
+    if (is.null(rho_between)) rho_between <- est$rho
+  }
 
   # Between-trial covariance
   Sigma_between <- matrix(
@@ -108,6 +170,8 @@ compute_pos_closed_form <- function(hist_data,
     sigma_posterior      = Sigma_final,
     mu_prior_hist        = as.numeric(mu_post_hist),
     sigma_prior_hist     = Sigma_post_hist,
-    credible_interval_os = ci_os
+    credible_interval_os = ci_os,
+    tau_used             = tau,
+    rho_between_used     = rho_between
   )
 }
