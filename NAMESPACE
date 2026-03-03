@@ -6,7 +6,6 @@ export(load_stan_model)
 export(compute_pos_mcmc)
 export(simulate_historical_data)
 export(compute_pos_closed_form)
-export(estimate_tau_rho)
 importFrom(MASS, mvrnorm)
 importFrom(ggplot2, ggplot, aes, geom_point, geom_smooth, geom_hline,
            geom_vline, geom_abline, labs, theme_bw, scale_color_manual,

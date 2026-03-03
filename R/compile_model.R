@@ -67,9 +67,9 @@ compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
   rstan::rstan_options(auto_write = TRUE)
   boost_lib <- .find_boost_path()
   if (nchar(boost_lib)) {
-    rstan::stan_model(file = stan_file, boost_lib = boost_lib)
+    rstan::stan_model(file = stan_file, auto_write = TRUE, boost_lib = boost_lib)
   } else {
-    rstan::stan_model(file = stan_file)
+    rstan::stan_model(file = stan_file, auto_write = TRUE)
   }
 
   rds_path <- sub("\\.stan$", ".rds", stan_file)
@@ -107,9 +107,9 @@ load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
   rstan::rstan_options(auto_write = TRUE)
   boost_lib <- .find_boost_path()
   if (nchar(boost_lib)) {
-    rstan::stan_model(file = stan_file, boost_lib = boost_lib)
+    rstan::stan_model(file = stan_file, auto_write = TRUE, boost_lib = boost_lib)
   } else {
-    rstan::stan_model(file = stan_file)
+    rstan::stan_model(file = stan_file, auto_write = TRUE)
   }
 }
 

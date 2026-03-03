@@ -9,7 +9,6 @@ pkg_available <- requireNamespace("PosPredictor", quietly = TRUE)
 if (pkg_available) {
   simulate_historical_data <- PosPredictor::simulate_historical_data
   compute_pos_closed_form  <- PosPredictor::compute_pos_closed_form
-  estimate_tau_rho         <- PosPredictor::estimate_tau_rho
   compile_stan_model       <- PosPredictor::compile_stan_model
   load_stan_model          <- PosPredictor::load_stan_model
   compute_pos_mcmc         <- PosPredictor::compute_pos_mcmc
@@ -136,54 +135,18 @@ server <- function(input, output, session) {
   # =========================================================================
   cf_result <- reactiveVal(NULL)
 
-  # Auto-populate tau / rho inputs from moment estimates of the historical data
-  observeEvent(input$cf_estimate_btn, {
-    df <- hist_data()
-    req(df)
-    est <- tryCatch(
-      estimate_tau_rho(df),
-      error = function(e) {
-        showNotification(paste("Estimation error:", conditionMessage(e)), type = "error")
-        NULL
-      }
-    )
-    if (!is.null(est)) {
-      tau_os_est  <- round(est$tau[1], 4)
-      tau_pfs_est <- round(est$tau[2], 4)
-      rho_est     <- round(est$rho,    2)
-      updateNumericInput(session, "cf_tau_os",      value = tau_os_est)
-      updateNumericInput(session, "cf_tau_pfs",     value = tau_pfs_est)
-      updateSliderInput(session,  "cf_rho_between", value = rho_est)
-      showNotification(
-        paste0("τ_OS = ", tau_os_est,
-               ", τ_PFS = ", tau_pfs_est,
-               ", ρ = ", rho_est,
-               " (estimated from historical data)"),
-        type = "message", duration = 6
-      )
-    }
-  })
-
   observeEvent(input$run_cf_btn, {
     df <- hist_data()
-    req(df, input$cur_y_os, input$cur_y_pfs,
-        input$cur_se_os, input$cur_se_pfs)
+    req(df, input$cur_y_pfs, input$cur_se_pfs)
 
     res <- tryCatch(
       compute_pos_closed_form(
-        hist_data           = df,
-        current_y_os        = input$cur_y_os,
-        current_y_pfs       = input$cur_y_pfs,
-        current_se_os       = input$cur_se_os,
-        current_se_pfs      = input$cur_se_pfs,
-        current_within_corr = input$cur_within_corr,
-        target_os           = input$target_os,
-        mu_prior            = c(input$cf_mu_os_prior_mean,
-                                input$cf_mu_pfs_prior_mean),
-        sigma_prior         = c(input$cf_sigma_prior_os,
-                                input$cf_sigma_prior_pfs),
-        tau                 = c(input$cf_tau_os, input$cf_tau_pfs),
-        rho_between         = input$cf_rho_between
+        hist_data      = df,
+        current_y_pfs  = input$cur_y_pfs,
+        current_se_pfs = input$cur_se_pfs,
+        target_os      = input$target_os,
+        mu_os          = input$cf_mu_os_prior_mean,
+        mu_pfs         = input$cf_mu_pfs_prior_mean
       ),
       error = function(e) {
         showNotification(paste("Error:", conditionMessage(e)), type = "error")
@@ -208,26 +171,22 @@ server <- function(input, output, session) {
                      " border-radius:8px; margin-bottom:10px;"),
       h3(paste0("Closed-Form PoS = ", pos_pct, "%"),
          style = "margin:0; font-size:28px;"),
-      p(paste0("Posterior mean θ_OS = ",
-               round(res$mu_posterior[1], 4),
+      p(paste0("Posterior mean θ_OS | PFS = ", round(res$m_post, 4),
                " (95% CI: ", ci[1], " to ", ci[2], ")"),
+        style = "margin:5px 0 0 0;"),
+      p(paste0("Posterior SD (predictive) = ", round(res$sd_eff, 4)),
         style = "margin:5px 0 0 0;"),
       p(paste0("Success threshold: target log(HR) = ", round(input$target_os, 3),
                " (HR ≤ ", round(exp(input$target_os), 3), ")"),
-        style = "margin:5px 0 0 0;"),
-      p(paste0("Between-trial parameters used: τ_OS = ",
-               round(res$tau_used[1], 4),
-               ", τ_PFS = ", round(res$tau_used[2], 4),
-               ", ρ = ", round(res$rho_between_used, 3)),
-        style = "margin:5px 0 0 0; font-size:13px; opacity:0.9;")
+        style = "margin:5px 0 0 0;")
     )
   })
 
   output$cf_posterior_os_plot <- renderPlot({
     res <- cf_result()
     req(res)
-    mu_os  <- res$mu_posterior[1]
-    sd_os  <- sqrt(res$sigma_posterior[1, 1])
+    mu_os  <- res$m_post
+    sd_os  <- res$sd_eff
     x_seq  <- seq(mu_os - 4 * sd_os, mu_os + 4 * sd_os, length.out = 400)
     df_plt <- data.frame(x = x_seq, y = dnorm(x_seq, mu_os, sd_os))
 
@@ -238,44 +197,12 @@ server <- function(input, output, session) {
       geom_vline(xintercept = input$target_os,
                  color = "red", linetype = "dashed") +
       geom_vline(xintercept = mu_os, color = "navy", linetype = "dotted") +
-      labs(title = "Posterior Distribution: θ_current, OS",
+      labs(title = "Posterior Distribution: θ_OS | y_PFS",
            subtitle = paste0("Shaded area = PoS = ",
                              round(pnorm(input$target_os, mu_os, sd_os) * 100, 1), "%"),
            x = "θ_OS (log HR)", y = "Density") +
       theme_bw(base_size = 12)
   })
-
-  output$cf_posterior_pfs_plot <- renderPlot({
-    res <- cf_result()
-    req(res)
-    mu_pfs  <- res$mu_posterior[2]
-    sd_pfs  <- sqrt(res$sigma_posterior[2, 2])
-    x_seq   <- seq(mu_pfs - 4 * sd_pfs, mu_pfs + 4 * sd_pfs, length.out = 400)
-    df_plt  <- data.frame(x = x_seq, y = dnorm(x_seq, mu_pfs, sd_pfs))
-
-    ggplot(df_plt, aes(x, y)) +
-      geom_line(color = "darkorange", linewidth = 1.2) +
-      geom_vline(xintercept = mu_pfs, color = "darkorange4", linetype = "dotted") +
-      labs(title = "Posterior Distribution: θ_current, PFS",
-           x = "θ_PFS (log HR)", y = "Density") +
-      theme_bw(base_size = 12)
-  })
-
-  output$cf_meta_summary <- renderTable({
-    res <- cf_result()
-    req(res)
-    data.frame(
-      Parameter = c("μ_OS (meta-analytic)",  "μ_PFS (meta-analytic)",
-                    "θ_OS (current, posterior)", "θ_PFS (current, posterior)"),
-      Estimate  = round(c(res$mu_prior_hist[1], res$mu_prior_hist[2],
-                          res$mu_posterior[1],  res$mu_posterior[2]), 4),
-      SD        = round(c(sqrt(res$sigma_prior_hist[1, 1]),
-                          sqrt(res$sigma_prior_hist[2, 2]),
-                          sqrt(res$sigma_posterior[1, 1]),
-                          sqrt(res$sigma_posterior[2, 2])), 4),
-      stringsAsFactors = FALSE
-    )
-  }, striped = TRUE, bordered = TRUE)
 
   # =========================================================================
   # Tab 4: MCMC PoS (Stan)

@@ -5,23 +5,23 @@
 #' effects -> observed data.
 #'
 #' @param K Integer. Number of historical trials (default 27).
-#' @param mu_os Numeric. True population mean log(HR) for OS (default -0.25).
-#' @param mu_pfs Numeric. True population mean log(HR) for PFS (default -0.35).
+#' @param mu_os Numeric. True population mean log(HR) for OS (default -0.30).
+#' @param mu_pfs Numeric. True population mean log(HR) for PFS (default -0.45).
 #' @param tau_os Numeric. Between-trial SD for OS (default 0.15).
-#' @param tau_pfs Numeric. Between-trial SD for PFS (default 0.18).
-#' @param rho Numeric. Between-trial correlation (default 0.75).
-#' @param seed Integer. Random seed for reproducibility (default 42).
+#' @param tau_pfs Numeric. Between-trial SD for PFS (default 0.12).
+#' @param rho Numeric. Between-trial correlation (default 0.65).
+#' @param seed Integer. Random seed for reproducibility (default 20260212).
 #' @return A data.frame with columns: trial, log_hr_os, log_hr_pfs,
 #'   se_os, se_pfs, within_corr, n_os_events, n_pfs_events,
 #'   true_theta_os, true_theta_pfs.
 #' @export
 simulate_historical_data <- function(K = 27,
-                                      mu_os  = -0.25,
-                                      mu_pfs = -0.35,
+                                      mu_os  = -0.30,
+                                      mu_pfs = -0.45,
                                       tau_os  = 0.15,
-                                      tau_pfs = 0.18,
-                                      rho     = 0.75,
-                                      seed    = 42) {
+                                      tau_pfs = 0.12,
+                                      rho     = 0.65,
+                                      seed    = 20260212) {
   set.seed(seed)
 
   # Between-trial covariance matrix (Level 3 -> Level 2)
