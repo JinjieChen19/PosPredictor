@@ -31,7 +31,12 @@ data {
   real<lower=0> mu_pfs_prior_sd;
   real<lower=0> tau_os_prior_sd;        // half-Normal SD for tau_os
   real<lower=0> tau_pfs_prior_sd;       // half-Normal SD for tau_pfs
-  real<lower=0> rho_z_prior_sd;         // SD for Fisher-z(rho) prior
+  // rho_z is the unconstrained Fisher transform of the between-trial correlation.
+  // rho = tanh(rho_z) maps rho_z back to (-1, 1).
+  // Setting rho_z_prior_mean = atanh(0.65) ≈ 0.775 centers the prior around
+  // correlation 0.65; rho_z_prior_mean = 0 gives a symmetric prior around rho = 0.
+  real rho_z_prior_mean;                 // prior mean for Fisher-z(rho)
+  real<lower=0> rho_z_prior_sd;         // prior SD  for Fisher-z(rho)
 }
 
 parameters {
@@ -74,7 +79,9 @@ model {
   mu[2]   ~ normal(mu_pfs_prior_mean, mu_pfs_prior_sd);
   tau_os  ~ normal(0, tau_os_prior_sd);     // half-normal (tau_os >= 0)
   tau_pfs ~ normal(0, tau_pfs_prior_sd);    // half-normal
-  rho_z   ~ normal(0, rho_z_prior_sd);      // Fisher-z: rho in (-1,1)
+  // rho_z ~ N(rho_z_prior_mean, rho_z_prior_sd): Fisher-z prior for correlation.
+  // rho = tanh(rho_z) constrains the between-trial correlation to (-1, 1).
+  rho_z   ~ normal(rho_z_prior_mean, rho_z_prior_sd);
 
   // --- Level 2: non-centered standard-normal auxiliaries ---
   for (k in 1:K) {
@@ -94,4 +101,10 @@ generated quantities {
   // step(x) = 1 if x >= 0, so step(target_os - theta_current[1]) = 1 iff
   // theta_current[1] <= target_os, i.e. the OS effect meets the threshold.
   real pos_os = step(target_os - theta_current[1]);
+
+  // Diagnostic aliases: copies of transformed parameters for user-facing
+  // posterior inspection (e.g. in bayesplot).  They do not change inference.
+  real rho_out          = rho;               // between-trial correlation on (-1, 1)
+  real theta_os_current  = theta_current[1]; // current trial true OS log(HR)
+  real theta_pfs_current = theta_current[2]; // current trial true PFS log(HR)
 }

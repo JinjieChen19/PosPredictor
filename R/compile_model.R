@@ -17,16 +17,55 @@
   ""  # not found
 }
 
-#' Compile the Hierarchical Stan Model and Save as RDS
+#' Get or Create a User-Writable Copy of the Stan Model File
+#'
+#' Copies the bundled Stan file to the package cache directory so that
+#' rstan's \code{auto_write} cache can be written alongside it.
+#' rstan uses \code{<stan_file_no_ext>.rds} as its cache path; the installed
+#' package directory is typically read-only and cannot be used for that.
+#' The cached copy is refreshed automatically whenever the bundled model
+#' changes (e.g. after a package upgrade), and the stale compiled RDS is
+#' removed so rstan recompiles from the updated model.
+#'
+#' @return Absolute path to the writable Stan file.
+#' @keywords internal
+.get_user_stan_file <- function() {
+  dir_path <- tools::R_user_dir("PosPredictor", "cache")
+  if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
+  user_stan <- file.path(dir_path, "hierarchical_model.stan")
+
+  pkg_stan <- system.file("stan", "hierarchical_model.stan",
+                          package = "PosPredictor")
+  if (!nchar(pkg_stan)) {
+    stop("Stan model file not found in PosPredictor installation.")
+  }
+
+  # Refresh the cached copy whenever the bundled model is newer (e.g. after
+  # a package upgrade that ships an updated Stan model).
+  needs_copy <- !file.exists(user_stan) ||
+    file.mtime(pkg_stan) > file.mtime(user_stan)
+
+  if (needs_copy) {
+    if (!file.copy(pkg_stan, user_stan, overwrite = TRUE)) {
+      stop("Failed to copy Stan model file to user cache directory: ", dir_path)
+    }
+    # Remove the stale compiled RDS so rstan recompiles from the updated model.
+    cached_rds <- sub("\\.stan$", ".rds", user_stan)
+    if (file.exists(cached_rds)) file.remove(cached_rds)
+  }
+  user_stan
+}
+
+#' Compile the Hierarchical Stan Model and Cache it for Reuse
 #'
 #' Compiles the Stan model bundled with PosPredictor and saves the resulting
-#' \code{stanmodel} object as an RDS file for instant reuse.  Priors are
+#' \code{stanmodel} object via rstan's \code{auto_write} mechanism so that it
+#' can be reloaded quickly—and correctly—in subsequent R sessions.  Priors are
 #' passed as data, so changing prior parameters does NOT require recompilation.
 #'
-#' @param output_path Character. Path where the compiled model RDS will be
-#'   saved.  Defaults to \code{~/.PosPredictor/compiled_model.rds}.
+#' @param output_path Ignored (kept for backward compatibility).
 #' @param verbose Logical. Print compilation progress (default TRUE).
-#' @return Invisibly returns the path to the saved RDS file.
+#' @return Invisibly returns the path to the cached RDS file.
 #' @export
 compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
   if (!requireNamespace("rstan", quietly = TRUE)) {
@@ -34,52 +73,57 @@ compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
          "  install.packages('rstan')")
   }
 
-  stan_file <- system.file("stan", "hierarchical_model.stan",
-                            package = "PosPredictor")
-  if (!nchar(stan_file)) {
-    stop("Stan model file not found in PosPredictor installation.")
-  }
-
-  if (is.null(output_path)) {
-    dir_path <- file.path(path.expand("~"), ".PosPredictor")
-    if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
-    output_path <- file.path(dir_path, "compiled_model.rds")
-  }
+  stan_file <- .get_user_stan_file()
 
   if (verbose) message("Compiling Stan model (this takes ~60-120 seconds the first time)...")
 
+  rstan::rstan_options(auto_write = TRUE)
   boost_lib <- .find_boost_path()
   if (nchar(boost_lib)) {
-    compiled <- rstan::stan_model(file = stan_file, boost_lib = boost_lib)
+    rstan::stan_model(file = stan_file, auto_write = TRUE, boost_lib = boost_lib)
   } else {
-    compiled <- rstan::stan_model(file = stan_file)
+    rstan::stan_model(file = stan_file, auto_write = TRUE)
   }
 
-  saveRDS(compiled, file = output_path)
-  if (verbose) message("Compiled model saved to: ", output_path)
-  invisible(output_path)
+  rds_path <- sub("\\.stan$", ".rds", stan_file)
+  if (verbose) message("Compiled model cached at: ", rds_path)
+  invisible(rds_path)
 }
 
 #' Load the Pre-compiled Stan Model
 #'
-#' Loads the pre-compiled Stan model RDS.  If the file does not exist,
-#' calls \code{\link{compile_stan_model}} first.
+#' Loads the Stan model, compiling it first if necessary.  Uses
+#' \code{rstan::stan_model()} rather than bare \code{readRDS()} so that
+#' the compiled DSO (shared library) is properly re-initialized in every
+#' R session—bare \code{readRDS()} leaves the DSO pointer NULL and causes
+#' \emph{"NULL value passed for DllInfo"} errors when sampling.
 #'
-#' @param rds_path Character. Path to the compiled model RDS.
-#'   Defaults to \code{~/.PosPredictor/compiled_model.rds}.
+#' @param rds_path Ignored (kept for backward compatibility).
 #' @param verbose Logical. Verbosity (default TRUE).
 #' @return A \code{stanmodel} object.
 #' @export
 load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
-  if (is.null(rds_path)) {
-    rds_path <- file.path(path.expand("~"), ".PosPredictor",
-                          "compiled_model.rds")
+  if (!requireNamespace("rstan", quietly = TRUE)) {
+    stop("Package 'rstan' is required.")
   }
-  if (!file.exists(rds_path)) {
-    if (verbose) message("Compiled model not found. Compiling now...")
-    compile_stan_model(output_path = rds_path, verbose = verbose)
+
+  stan_file <- .get_user_stan_file()
+  cached_rds <- sub("\\.stan$", ".rds", stan_file)
+
+  if (!file.exists(cached_rds) && verbose) {
+    message("Compiled model not found. Compiling now...")
   }
-  readRDS(rds_path)
+
+  # Always use stan_model() so rstan properly reinitializes the DSO in every
+  # session.  readRDS() alone restores the R object but leaves the compiled
+  # shared library uninitialized, producing "NULL value passed for DllInfo".
+  rstan::rstan_options(auto_write = TRUE)
+  boost_lib <- .find_boost_path()
+  if (nchar(boost_lib)) {
+    rstan::stan_model(file = stan_file, auto_write = TRUE, boost_lib = boost_lib)
+  } else {
+    rstan::stan_model(file = stan_file, auto_write = TRUE)
+  }
 }
 
 #' Run MCMC via Stan to Compute PoS
@@ -100,6 +144,8 @@ load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
 #' @param mu_pfs_prior_sd Numeric. Prior SD for population PFS log(HR).
 #' @param tau_os_prior_sd Numeric. Half-normal SD prior for tau_os.
 #' @param tau_pfs_prior_sd Numeric. Half-normal SD prior for tau_pfs.
+#' @param rho_z_prior_mean Numeric. Mean for Fisher-z prior on rho (default
+#'   \code{atanh(0.65)} ≈ 0.775, centering the prior around correlation 0.65).
 #' @param rho_z_prior_sd Numeric. SD for Fisher-z prior on rho.
 #' @param iter Integer. Total MCMC iterations per chain (default 2000).
 #' @param warmup Integer. Warmup iterations (default 1000).
@@ -123,6 +169,7 @@ compute_pos_mcmc <- function(hist_data,
                               mu_pfs_prior_sd     =  0.50,
                               tau_os_prior_sd     =  0.25,
                               tau_pfs_prior_sd    =  0.25,
+                              rho_z_prior_mean    =  atanh(0.65),
                               rho_z_prior_sd      =  1.50,
                               iter                = 2000,
                               warmup              = 1000,
@@ -180,6 +227,7 @@ compute_pos_mcmc <- function(hist_data,
     mu_pfs_prior_sd   = mu_pfs_prior_sd,
     tau_os_prior_sd   = tau_os_prior_sd,
     tau_pfs_prior_sd  = tau_pfs_prior_sd,
+    rho_z_prior_mean  = rho_z_prior_mean,
     rho_z_prior_sd    = rho_z_prior_sd
   )
 
@@ -205,7 +253,9 @@ compute_pos_mcmc <- function(hist_data,
 
   key_params <- fit_summary[fit_summary$parameter %in%
                               c("mu[1]", "mu[2]", "tau_os", "tau_pfs",
-                                "rho", "theta_current[1]", "pos_os"), ]
+                                "rho", "rho_out",
+                                "theta_current[1]", "theta_os_current",
+                                "theta_pfs_current", "pos_os"), ]
 
   rhat_ok <- all(key_params[["Rhat"]] < 1.01, na.rm = TRUE)
   ess_ok  <- all(key_params[["n_eff"]] > 400,  na.rm = TRUE)

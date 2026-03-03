@@ -137,24 +137,16 @@ server <- function(input, output, session) {
 
   observeEvent(input$run_cf_btn, {
     df <- hist_data()
-    req(df, input$cur_y_os, input$cur_y_pfs,
-        input$cur_se_os, input$cur_se_pfs)
+    req(df, input$cur_y_pfs, input$cur_se_pfs)
 
     res <- tryCatch(
       compute_pos_closed_form(
-        hist_data           = df,
-        current_y_os        = input$cur_y_os,
-        current_y_pfs       = input$cur_y_pfs,
-        current_se_os       = input$cur_se_os,
-        current_se_pfs      = input$cur_se_pfs,
-        current_within_corr = input$cur_within_corr,
-        target_os           = input$target_os,
-        mu_prior            = c(input$cf_mu_os_prior_mean,
-                                input$cf_mu_pfs_prior_mean),
-        sigma_prior         = c(input$cf_sigma_prior_os,
-                                input$cf_sigma_prior_pfs),
-        tau                 = c(input$cf_tau_os, input$cf_tau_pfs),
-        rho_between         = input$cf_rho_between
+        hist_data      = df,
+        current_y_pfs  = input$cur_y_pfs,
+        current_se_pfs = input$cur_se_pfs,
+        target_os      = input$target_os,
+        mu_os          = input$cf_mu_os_prior_mean,
+        mu_pfs         = input$cf_mu_pfs_prior_mean
       ),
       error = function(e) {
         showNotification(paste("Error:", conditionMessage(e)), type = "error")
@@ -179,9 +171,10 @@ server <- function(input, output, session) {
                      " border-radius:8px; margin-bottom:10px;"),
       h3(paste0("Closed-Form PoS = ", pos_pct, "%"),
          style = "margin:0; font-size:28px;"),
-      p(paste0("Posterior mean θ_OS = ",
-               round(res$mu_posterior[1], 4),
+      p(paste0("Posterior mean θ_OS | PFS = ", round(res$m_post, 4),
                " (95% CI: ", ci[1], " to ", ci[2], ")"),
+        style = "margin:5px 0 0 0;"),
+      p(paste0("Posterior SD (predictive) = ", round(res$sd_eff, 4)),
         style = "margin:5px 0 0 0;"),
       p(paste0("Success threshold: target log(HR) = ", round(input$target_os, 3),
                " (HR ≤ ", round(exp(input$target_os), 3), ")"),
@@ -192,8 +185,8 @@ server <- function(input, output, session) {
   output$cf_posterior_os_plot <- renderPlot({
     res <- cf_result()
     req(res)
-    mu_os  <- res$mu_posterior[1]
-    sd_os  <- sqrt(res$sigma_posterior[1, 1])
+    mu_os  <- res$m_post
+    sd_os  <- res$sd_eff
     x_seq  <- seq(mu_os - 4 * sd_os, mu_os + 4 * sd_os, length.out = 400)
     df_plt <- data.frame(x = x_seq, y = dnorm(x_seq, mu_os, sd_os))
 
@@ -204,44 +197,12 @@ server <- function(input, output, session) {
       geom_vline(xintercept = input$target_os,
                  color = "red", linetype = "dashed") +
       geom_vline(xintercept = mu_os, color = "navy", linetype = "dotted") +
-      labs(title = "Posterior Distribution: θ_current, OS",
+      labs(title = "Posterior Distribution: θ_OS | y_PFS",
            subtitle = paste0("Shaded area = PoS = ",
                              round(pnorm(input$target_os, mu_os, sd_os) * 100, 1), "%"),
            x = "θ_OS (log HR)", y = "Density") +
       theme_bw(base_size = 12)
   })
-
-  output$cf_posterior_pfs_plot <- renderPlot({
-    res <- cf_result()
-    req(res)
-    mu_pfs  <- res$mu_posterior[2]
-    sd_pfs  <- sqrt(res$sigma_posterior[2, 2])
-    x_seq   <- seq(mu_pfs - 4 * sd_pfs, mu_pfs + 4 * sd_pfs, length.out = 400)
-    df_plt  <- data.frame(x = x_seq, y = dnorm(x_seq, mu_pfs, sd_pfs))
-
-    ggplot(df_plt, aes(x, y)) +
-      geom_line(color = "darkorange", linewidth = 1.2) +
-      geom_vline(xintercept = mu_pfs, color = "darkorange4", linetype = "dotted") +
-      labs(title = "Posterior Distribution: θ_current, PFS",
-           x = "θ_PFS (log HR)", y = "Density") +
-      theme_bw(base_size = 12)
-  })
-
-  output$cf_meta_summary <- renderTable({
-    res <- cf_result()
-    req(res)
-    data.frame(
-      Parameter = c("μ_OS (meta-analytic)",  "μ_PFS (meta-analytic)",
-                    "θ_OS (current, posterior)", "θ_PFS (current, posterior)"),
-      Estimate  = round(c(res$mu_prior_hist[1], res$mu_prior_hist[2],
-                          res$mu_posterior[1],  res$mu_posterior[2]), 4),
-      SD        = round(c(sqrt(res$sigma_prior_hist[1, 1]),
-                          sqrt(res$sigma_prior_hist[2, 2]),
-                          sqrt(res$sigma_posterior[1, 1]),
-                          sqrt(res$sigma_posterior[2, 2])), 4),
-      stringsAsFactors = FALSE
-    )
-  }, striped = TRUE, bordered = TRUE)
 
   # =========================================================================
   # Tab 4: MCMC PoS (Stan)
@@ -250,10 +211,9 @@ server <- function(input, output, session) {
 
   # Compile Stan model
   observeEvent(input$compile_btn, {
-    rds <- if (nchar(trimws(input$rds_path)) > 0) input$rds_path else NULL
     withProgress(message = "Compiling Stan model...", value = 0.5, {
       tryCatch(
-        compile_stan_model(output_path = rds, verbose = FALSE),
+        compile_stan_model(verbose = FALSE),
         error = function(e) {
           showNotification(paste("Compilation error:", conditionMessage(e)),
                            type = "error", duration = 10)
@@ -267,7 +227,6 @@ server <- function(input, output, session) {
   observeEvent(input$run_mcmc_btn, {
     df <- hist_data()
     req(df)
-    rds_path_val <- if (nchar(trimws(input$rds_path)) > 0) input$rds_path else NULL
 
     withProgress(message = "Running MCMC (this may take a few minutes)...",
                  value = 0.3, {
@@ -286,12 +245,12 @@ server <- function(input, output, session) {
           mu_pfs_prior_sd     = input$mc_mu_pfs_sd,
           tau_os_prior_sd     = input$mc_tau_os_sd,
           tau_pfs_prior_sd    = input$mc_tau_pfs_sd,
+          rho_z_prior_mean    = input$mc_rho_z_mean,
           rho_z_prior_sd      = input$mc_rho_z_sd,
           iter                = input$mc_iter,
           warmup              = input$mc_warmup,
           chains              = input$mc_chains,
           adapt_delta         = input$mc_adapt,
-          rds_path            = rds_path_val,
           seed                = input$mc_seed
         ),
         error = function(e) {
