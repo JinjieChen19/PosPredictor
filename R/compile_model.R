@@ -41,10 +41,11 @@ compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
   }
 
   if (is.null(output_path)) {
-    dir_path <- file.path(path.expand("~"), ".PosPredictor")
-    if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
-    output_path <- file.path(dir_path, "compiled_model.rds")
+    output_path <- file.path(path.expand("~"), ".PosPredictor",
+                             "compiled_model.rds")
   }
+  dir_path <- dirname(output_path)
+  if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
 
   if (verbose) message("Compiling Stan model (this takes ~60-120 seconds the first time)...")
 
