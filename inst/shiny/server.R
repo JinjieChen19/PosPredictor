@@ -211,10 +211,9 @@ server <- function(input, output, session) {
 
   # Compile Stan model
   observeEvent(input$compile_btn, {
-    rds <- if (nchar(trimws(input$rds_path)) > 0) input$rds_path else NULL
     withProgress(message = "Compiling Stan model...", value = 0.5, {
       tryCatch(
-        compile_stan_model(output_path = rds, verbose = FALSE),
+        compile_stan_model(verbose = FALSE),
         error = function(e) {
           showNotification(paste("Compilation error:", conditionMessage(e)),
                            type = "error", duration = 10)
@@ -228,7 +227,6 @@ server <- function(input, output, session) {
   observeEvent(input$run_mcmc_btn, {
     df <- hist_data()
     req(df)
-    rds_path_val <- if (nchar(trimws(input$rds_path)) > 0) input$rds_path else NULL
 
     withProgress(message = "Running MCMC (this may take a few minutes)...",
                  value = 0.3, {
@@ -252,7 +250,6 @@ server <- function(input, output, session) {
           warmup              = input$mc_warmup,
           chains              = input$mc_chains,
           adapt_delta         = input$mc_adapt,
-          rds_path            = rds_path_val,
           seed                = input$mc_seed
         ),
         error = function(e) {

@@ -72,7 +72,7 @@ compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
     rstan::stan_model(file = stan_file, auto_write = TRUE)
   }
 
-  rds_path <- sub("\\.stan$", ".rds", stan_file)
+  rds_path <- paste0(stan_file, ".rds")
   if (verbose) message("Compiled model cached at: ", rds_path)
   invisible(rds_path)
 }
@@ -95,7 +95,7 @@ load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
   }
 
   stan_file <- .get_user_stan_file()
-  cached_rds <- sub("\\.stan$", ".rds", stan_file)
+  cached_rds <- paste0(stan_file, ".rds")
 
   if (!file.exists(cached_rds) && verbose) {
     message("Compiled model not found. Compiling now...")
