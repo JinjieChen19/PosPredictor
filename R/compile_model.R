@@ -21,8 +21,11 @@
 #'
 #' Copies the bundled Stan file to the package cache directory so that
 #' rstan's \code{auto_write} cache can be written alongside it.
-#' rstan uses \code{<stan_file>.rds} as its cache path; the installed
+#' rstan uses \code{<stan_file_no_ext>.rds} as its cache path; the installed
 #' package directory is typically read-only and cannot be used for that.
+#' The cached copy is refreshed automatically whenever the bundled model
+#' changes (e.g. after a package upgrade), and the stale compiled RDS is
+#' removed so rstan recompiles from the updated model.
 #'
 #' @return Absolute path to the writable Stan file.
 #' @keywords internal
@@ -30,15 +33,25 @@
   dir_path <- tools::R_user_dir("PosPredictor", "cache")
   if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
   user_stan <- file.path(dir_path, "hierarchical_model.stan")
-  if (!file.exists(user_stan)) {
-    pkg_stan <- system.file("stan", "hierarchical_model.stan",
-                            package = "PosPredictor")
-    if (!nchar(pkg_stan)) {
-      stop("Stan model file not found in PosPredictor installation.")
-    }
-    if (!file.copy(pkg_stan, user_stan)) {
+
+  pkg_stan <- system.file("stan", "hierarchical_model.stan",
+                          package = "PosPredictor")
+  if (!nchar(pkg_stan)) {
+    stop("Stan model file not found in PosPredictor installation.")
+  }
+
+  # Refresh the cached copy whenever the bundled model is newer (e.g. after
+  # a package upgrade that ships an updated Stan model).
+  needs_copy <- !file.exists(user_stan) ||
+    file.mtime(pkg_stan) > file.mtime(user_stan)
+
+  if (needs_copy) {
+    if (!file.copy(pkg_stan, user_stan, overwrite = TRUE)) {
       stop("Failed to copy Stan model file to user cache directory: ", dir_path)
     }
+    # Remove the stale compiled RDS so rstan recompiles from the updated model.
+    cached_rds <- sub("\\.stan$", ".rds", user_stan)
+    if (file.exists(cached_rds)) file.remove(cached_rds)
   }
   user_stan
 }
@@ -72,7 +85,7 @@ compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
     rstan::stan_model(file = stan_file, auto_write = TRUE)
   }
 
-  rds_path <- paste0(stan_file, ".rds")
+  rds_path <- sub("\\.stan$", ".rds", stan_file)
   if (verbose) message("Compiled model cached at: ", rds_path)
   invisible(rds_path)
 }
@@ -95,7 +108,7 @@ load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
   }
 
   stan_file <- .get_user_stan_file()
-  cached_rds <- paste0(stan_file, ".rds")
+  cached_rds <- sub("\\.stan$", ".rds", stan_file)
 
   if (!file.exists(cached_rds) && verbose) {
     message("Compiled model not found. Compiling now...")
@@ -131,6 +144,8 @@ load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
 #' @param mu_pfs_prior_sd Numeric. Prior SD for population PFS log(HR).
 #' @param tau_os_prior_sd Numeric. Half-normal SD prior for tau_os.
 #' @param tau_pfs_prior_sd Numeric. Half-normal SD prior for tau_pfs.
+#' @param rho_z_prior_mean Numeric. Mean for Fisher-z prior on rho (default
+#'   \code{atanh(0.65)} ≈ 0.775, centering the prior around correlation 0.65).
 #' @param rho_z_prior_sd Numeric. SD for Fisher-z prior on rho.
 #' @param iter Integer. Total MCMC iterations per chain (default 2000).
 #' @param warmup Integer. Warmup iterations (default 1000).
@@ -154,6 +169,7 @@ compute_pos_mcmc <- function(hist_data,
                               mu_pfs_prior_sd     =  0.50,
                               tau_os_prior_sd     =  0.25,
                               tau_pfs_prior_sd    =  0.25,
+                              rho_z_prior_mean    =  atanh(0.65),
                               rho_z_prior_sd      =  1.50,
                               iter                = 2000,
                               warmup              = 1000,
@@ -211,6 +227,7 @@ compute_pos_mcmc <- function(hist_data,
     mu_pfs_prior_sd   = mu_pfs_prior_sd,
     tau_os_prior_sd   = tau_os_prior_sd,
     tau_pfs_prior_sd  = tau_pfs_prior_sd,
+    rho_z_prior_mean  = rho_z_prior_mean,
     rho_z_prior_sd    = rho_z_prior_sd
   )
 
@@ -236,7 +253,9 @@ compute_pos_mcmc <- function(hist_data,
 
   key_params <- fit_summary[fit_summary$parameter %in%
                               c("mu[1]", "mu[2]", "tau_os", "tau_pfs",
-                                "rho", "theta_current[1]", "pos_os"), ]
+                                "rho", "rho_out",
+                                "theta_current[1]", "theta_os_current",
+                                "theta_pfs_current", "pos_os"), ]
 
   rhat_ok <- all(key_params[["Rhat"]] < 1.01, na.rm = TRUE)
   ess_ok  <- all(key_params[["n_eff"]] > 400,  na.rm = TRUE)

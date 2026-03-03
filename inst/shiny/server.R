@@ -245,6 +245,7 @@ server <- function(input, output, session) {
           mu_pfs_prior_sd     = input$mc_mu_pfs_sd,
           tau_os_prior_sd     = input$mc_tau_os_sd,
           tau_pfs_prior_sd    = input$mc_tau_pfs_sd,
+          rho_z_prior_mean    = input$mc_rho_z_mean,
           rho_z_prior_sd      = input$mc_rho_z_sd,
           iter                = input$mc_iter,
           warmup              = input$mc_warmup,

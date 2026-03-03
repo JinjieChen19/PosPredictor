@@ -210,6 +210,7 @@ navbarPage(
           numericInput("mc_mu_pfs_sd",   "Prior SD μ_PFS",    0.50, min = 0.01, step = 0.05),
           numericInput("mc_tau_os_sd",   "τ_OS half-Normal SD",  0.25, min = 0.01, step = 0.05),
           numericInput("mc_tau_pfs_sd",  "τ_PFS half-Normal SD", 0.25, min = 0.01, step = 0.05),
+          numericInput("mc_rho_z_mean",  "Fisher-z(ρ) prior mean", round(atanh(0.65), 3), step = 0.05),
           numericInput("mc_rho_z_sd",    "Fisher-z(ρ) prior SD", 1.50, min = 0.10, step = 0.10),
           h4("MCMC Settings"),
           numericInput("mc_iter",    "Total iterations",  2000, min = 500,  step = 500),
