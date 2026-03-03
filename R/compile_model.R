@@ -17,16 +17,42 @@
   ""  # not found
 }
 
-#' Compile the Hierarchical Stan Model and Save as RDS
+#' Get or Create a User-Writable Copy of the Stan Model File
+#'
+#' Copies the bundled Stan file to the package cache directory so that
+#' rstan's \code{auto_write} cache can be written alongside it.
+#' rstan uses \code{<stan_file>.rds} as its cache path; the installed
+#' package directory is typically read-only and cannot be used for that.
+#'
+#' @return Absolute path to the writable Stan file.
+#' @keywords internal
+.get_user_stan_file <- function() {
+  dir_path <- tools::R_user_dir("PosPredictor", "cache")
+  if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
+  user_stan <- file.path(dir_path, "hierarchical_model.stan")
+  if (!file.exists(user_stan)) {
+    pkg_stan <- system.file("stan", "hierarchical_model.stan",
+                            package = "PosPredictor")
+    if (!nchar(pkg_stan)) {
+      stop("Stan model file not found in PosPredictor installation.")
+    }
+    if (!file.copy(pkg_stan, user_stan)) {
+      stop("Failed to copy Stan model file to user cache directory: ", dir_path)
+    }
+  }
+  user_stan
+}
+
+#' Compile the Hierarchical Stan Model and Cache it for Reuse
 #'
 #' Compiles the Stan model bundled with PosPredictor and saves the resulting
-#' \code{stanmodel} object as an RDS file for instant reuse.  Priors are
+#' \code{stanmodel} object via rstan's \code{auto_write} mechanism so that it
+#' can be reloaded quickly—and correctly—in subsequent R sessions.  Priors are
 #' passed as data, so changing prior parameters does NOT require recompilation.
 #'
-#' @param output_path Character. Path where the compiled model RDS will be
-#'   saved.  Defaults to \code{~/.PosPredictor/compiled_model.rds}.
+#' @param output_path Ignored (kept for backward compatibility).
 #' @param verbose Logical. Print compilation progress (default TRUE).
-#' @return Invisibly returns the path to the saved RDS file.
+#' @return Invisibly returns the path to the cached RDS file.
 #' @export
 compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
   if (!requireNamespace("rstan", quietly = TRUE)) {
@@ -34,53 +60,57 @@ compile_stan_model <- function(output_path = NULL, verbose = TRUE) {
          "  install.packages('rstan')")
   }
 
-  stan_file <- system.file("stan", "hierarchical_model.stan",
-                            package = "PosPredictor")
-  if (!nchar(stan_file)) {
-    stop("Stan model file not found in PosPredictor installation.")
-  }
-
-  if (is.null(output_path)) {
-    output_path <- file.path(path.expand("~"), ".PosPredictor",
-                             "compiled_model.rds")
-  }
-  dir_path <- dirname(output_path)
-  if (!dir.exists(dir_path)) dir.create(dir_path, recursive = TRUE)
+  stan_file <- .get_user_stan_file()
 
   if (verbose) message("Compiling Stan model (this takes ~60-120 seconds the first time)...")
 
+  rstan::rstan_options(auto_write = TRUE)
   boost_lib <- .find_boost_path()
   if (nchar(boost_lib)) {
-    compiled <- rstan::stan_model(file = stan_file, boost_lib = boost_lib)
+    rstan::stan_model(file = stan_file, boost_lib = boost_lib)
   } else {
-    compiled <- rstan::stan_model(file = stan_file)
+    rstan::stan_model(file = stan_file)
   }
 
-  saveRDS(compiled, file = output_path)
-  if (verbose) message("Compiled model saved to: ", output_path)
-  invisible(output_path)
+  rds_path <- sub("\\.stan$", ".rds", stan_file)
+  if (verbose) message("Compiled model cached at: ", rds_path)
+  invisible(rds_path)
 }
 
 #' Load the Pre-compiled Stan Model
 #'
-#' Loads the pre-compiled Stan model RDS.  If the file does not exist,
-#' calls \code{\link{compile_stan_model}} first.
+#' Loads the Stan model, compiling it first if necessary.  Uses
+#' \code{rstan::stan_model()} rather than bare \code{readRDS()} so that
+#' the compiled DSO (shared library) is properly re-initialized in every
+#' R session—bare \code{readRDS()} leaves the DSO pointer NULL and causes
+#' \emph{"NULL value passed for DllInfo"} errors when sampling.
 #'
-#' @param rds_path Character. Path to the compiled model RDS.
-#'   Defaults to \code{~/.PosPredictor/compiled_model.rds}.
+#' @param rds_path Ignored (kept for backward compatibility).
 #' @param verbose Logical. Verbosity (default TRUE).
 #' @return A \code{stanmodel} object.
 #' @export
 load_stan_model <- function(rds_path = NULL, verbose = TRUE) {
-  if (is.null(rds_path)) {
-    rds_path <- file.path(path.expand("~"), ".PosPredictor",
-                          "compiled_model.rds")
+  if (!requireNamespace("rstan", quietly = TRUE)) {
+    stop("Package 'rstan' is required.")
   }
-  if (!file.exists(rds_path)) {
-    if (verbose) message("Compiled model not found. Compiling now...")
-    compile_stan_model(output_path = rds_path, verbose = verbose)
+
+  stan_file <- .get_user_stan_file()
+  cached_rds <- sub("\\.stan$", ".rds", stan_file)
+
+  if (!file.exists(cached_rds) && verbose) {
+    message("Compiled model not found. Compiling now...")
   }
-  readRDS(rds_path)
+
+  # Always use stan_model() so rstan properly reinitializes the DSO in every
+  # session.  readRDS() alone restores the R object but leaves the compiled
+  # shared library uninitialized, producing "NULL value passed for DllInfo".
+  rstan::rstan_options(auto_write = TRUE)
+  boost_lib <- .find_boost_path()
+  if (nchar(boost_lib)) {
+    rstan::stan_model(file = stan_file, boost_lib = boost_lib)
+  } else {
+    rstan::stan_model(file = stan_file)
+  }
 }
 
 #' Run MCMC via Stan to Compute PoS
